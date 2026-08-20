@@ -290,14 +290,14 @@ export function startDashboardServer(client, port = Number(process.env.PORT || 3
               const pattern = String(settings.pattern || '').trim();
               const action = String(settings.action || 'delete').trim();
 
-              if (!['regex', 'word', 'domain'].includes(type)) {
-                return json({ success: false, error: 'Filter type must be regex, word, or domain.' }, 400);
+              if (!['regex', 'word', 'domain', 'domain_blacklist', 'domain_whitelist', 'role_whitelist', 'channel_whitelist'].includes(type)) {
+                return json({ success: false, error: 'Filter type must be regex, word, domain, domain_blacklist, domain_whitelist, role_whitelist, or channel_whitelist.' }, 400);
               }
               if (!pattern) {
                 return json({ success: false, error: 'Pattern is required.' }, 400);
               }
-              if (!['delete', 'warn', 'timeout', 'ban'].includes(action)) {
-                return json({ success: false, error: 'Action must be delete, warn, timeout, or ban.' }, 400);
+              if (!['delete', 'warn', 'timeout', 'kick', 'ban'].includes(action)) {
+                return json({ success: false, error: 'Action must be delete, warn, timeout, kick, or ban.' }, 400);
               }
 
               const filterId = await addAutomodFilter(guildId, type, pattern, {

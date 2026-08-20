@@ -23,6 +23,7 @@ export default {
   name: Events.ClientReady,
   once: true,
   async execute(client) {
+    client.startTime = Date.now();
     logger.info(`เข้าสู่ระบบเป็น ${client.user.tag}`);
     logger.info(`อยู่ใน ${client.guilds.cache.size} เซิร์ฟเวอร์`);
     client.user.setActivity('/help | Ultimate Enterprise Bot', { type: ActivityType.Watching });

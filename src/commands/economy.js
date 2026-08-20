@@ -189,15 +189,29 @@ export async function execute(interaction) {
   if (commandName === 'leaderboard') {
     const sorted = await getEconomyLeaderboard(guildId, 10);
     if (!sorted.length) return interaction.reply({ content: 'ยังไม่มีข้อมูลในเซิร์ฟเวอร์นี้', ...EPHEMERAL });
+    const medals = ['🥇', '🥈', '🥉'];
     const lines = await Promise.all(sorted.map(async (entry, i) => {
       const user = await interaction.client.users.fetch(entry.userId).catch(() => null);
       const name = user ? user.username : entry.userId;
-      const medal = i === 0 ? '1.' : `${i + 1}.`;
-      return `${medal} **${name}** — ${formatMoney(entry.total)} เหรียญ`;
+      const medal = medals[i] ?? `${i + 1}.`;
+      const isSelf = entry.userId === userId;
+      return `${isSelf ? '▶ ' : ''}${medal} **${name}** — ${formatMoney(entry.total)} เหรียญ`;
     }));
-    await interaction.reply({ embeds: [baseEmbed('Leaderboard', lines.join('\n'))] });
+    const embed = baseEmbed('🏆 Leaderboard — มหาเศรษฐีเซิร์ฟเวอร์', lines.join('\n'));
+    // If the caller is not in the top 10, show their rank at the bottom
+    const selfInTop = sorted.some(e => e.userId === userId);
+    if (!selfInTop) {
+      const allSorted = await getEconomyLeaderboard(guildId, 999);
+      const selfRank = allSorted.findIndex(e => e.userId === userId);
+      if (selfRank !== -1) {
+        const selfEntry = allSorted[selfRank];
+        embed.addFields({ name: '📍 ตำแหน่งของคุณ', value: `อันดับที่ **${selfRank + 1}** — ${formatMoney(selfEntry.total)} เหรียญ`, inline: false });
+      }
+    }
+    await interaction.reply({ embeds: [embed] });
     return;
   }
+
 
   if (commandName === 'deposit') {
     const amount = interaction.options.getInteger('amount');

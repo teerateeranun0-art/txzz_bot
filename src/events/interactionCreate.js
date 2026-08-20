@@ -1,11 +1,15 @@
 import { Events, ChannelType, PermissionFlagsBits } from 'discord.js';
-import { errorEmbed, successEmbed, EPHEMERAL } from '../utils/embeds.js';
+import { errorEmbed, successEmbed, infoEmbed, EPHEMERAL } from '../utils/embeds.js';
 import { memberHas, botHasInChannel, permissionNames } from '../utils/permissions.js';
-import { getGuildConfig, getTicketPanel, getGuildPanels } from '../utils/database.js';
+import { getGuildConfig, getTicketPanel, getGuildPanels, getVerificationConfig } from '../utils/database.js';
 import { logger } from '../utils/logger.js';
 import { userFacingError, mentionUsers, isSnowflake } from '../utils/sanitize.js';
 import { openTicket, claimTicketByStaff, closeTicketById } from '../tickets/manager.js';
 import { processFeedback, requestFeedback } from '../tickets/feedback.js';
+import { processVerification, showCaptchaModal } from '../community/verification.js';
+import { rateLimiter } from '../security/rate-limiter.js';
+import { metrics } from '../utils/metrics.js';
+import { errorTracker } from '../utils/error-tracker.js';
 
 export default {
   name: Events.InteractionCreate,
@@ -19,6 +23,8 @@ export default {
         const id = interaction.customId;
         if (id === 'ticket_open') {
           await handleTicketOpen(interaction);
+        } else if (id === 'verify_btn_click') {
+          await handleVerificationButtonClick(interaction);
         } else if (id.startsWith('ticket_panel_open_')) {
           await handlePanelTicketOpen(interaction);
         } else if (id.startsWith('ticket_claim_')) {
@@ -28,16 +34,19 @@ export default {
         } else if (id.startsWith('feedback_')) {
           await handleFeedback(interaction);
         }
+        return;
+      }
+      if (interaction.isModalSubmit()) {
+        const id = interaction.customId;
+        if (id.startsWith('verify_modal_submit_')) {
+          await handleVerificationModalSubmit(interaction);
+        }
       }
     } catch (err) {
       logger.error('interactionCreate', err);
     }
   },
 };
-
-import { rateLimiter } from '../security/rate-limiter.js';
-import { metrics } from '../utils/metrics.js';
-import { errorTracker } from '../utils/error-tracker.js';
 
 async function handleCommand(interaction, client) {
   const command = client.commands.get(interaction.commandName);
@@ -325,5 +334,114 @@ async function handleFeedback(interaction) {
   } catch (err) {
     logger.error('handleFeedback error', err);
     await interaction.reply({ content: 'Error processing feedback.', ephemeral: true });
+  }
+}
+
+/**
+ * Handle verification button click (verify_btn_click).
+ */
+async function handleVerificationButtonClick(interaction) {
+  if (!interaction.guild) {
+    await interaction.reply({ embeds: [errorEmbed('ใช้ได้เฉพาะในเซิร์ฟเวอร์')], ...EPHEMERAL });
+    return;
+  }
+
+  const config = await getVerificationConfig(interaction.guild.id);
+  if (!config || !config.enabled) {
+    await interaction.reply({
+      embeds: [errorEmbed('ระบบยืนยันตัวตนยังไม่ได้เปิดใช้งาน หรือถูกปิดโดยผู้ดูแลเซิร์ฟเวอร์')],
+      ...EPHEMERAL,
+    });
+    return;
+  }
+
+  // Check if already verified
+  if (interaction.member.roles.cache.has(config.roleId)) {
+    const role = interaction.guild.roles.cache.get(config.roleId);
+    await interaction.reply({
+      embeds: [infoEmbed('ยืนยันตัวตนแล้ว', `คุณได้รับการยืนยันตัวตนและมียศ ${role ? `<@&${role.id}>` : 'สมาชิก'} อยู่แล้ว`)],
+      ...EPHEMERAL,
+    });
+    return;
+  }
+
+  // If captcha mode is enabled -> show modal
+  if (config.mode === 'captcha') {
+    try {
+      await showCaptchaModal(interaction);
+    } catch (err) {
+      logger.error('showCaptchaModal failed', err);
+      await interaction.reply({
+        embeds: [errorEmbed('เกิดข้อผิดพลาดในการสร้าง Captcha โปรดลองอีกครั้ง')],
+        ...EPHEMERAL,
+      });
+    }
+    return;
+  }
+
+  // Instant mode
+  await interaction.deferReply({ ...EPHEMERAL });
+  try {
+    const result = await processVerification(interaction, interaction.member, config, 'instant');
+    if (result.alreadyVerified) {
+      await interaction.editReply({
+        embeds: [infoEmbed('ยืนยันตัวตนแล้ว', `คุณได้รับการยืนยันตัวตนและมียศ **${result.roleName}** อยู่แล้ว`)],
+      });
+      return;
+    }
+
+    await interaction.editReply({
+      embeds: [successEmbed(`🎉 **ยินดีต้อนรับ!** คุณได้ยืนยันตัวตนสำเร็จและได้รับยศ <@&${result.roleId}> เรียบร้อยแล้ว`)],
+    });
+  } catch (err) {
+    await interaction.editReply({
+      embeds: [errorEmbed(`ยืนยันตัวตนไม่สำเร็จ: ${err.message}`)],
+    });
+  }
+}
+
+/**
+ * Handle verification captcha modal submission (verify_modal_submit_<code>).
+ */
+async function handleVerificationModalSubmit(interaction) {
+  if (!interaction.guild) return;
+
+  const expectedCode = interaction.customId.replace('verify_modal_submit_', '').trim().toUpperCase();
+  const inputCode = interaction.fields.getTextInputValue('captcha_code')?.trim().toUpperCase();
+
+  if (!inputCode || inputCode !== expectedCode) {
+    await interaction.reply({
+      embeds: [errorEmbed('❌ รหัส Captcha ไม่ถูกต้อง! โปรดกดปุ่มยืนยันตัวตนเพื่อลองใหม่อีกครั้ง')],
+      ...EPHEMERAL,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ...EPHEMERAL });
+
+  try {
+    const config = await getVerificationConfig(interaction.guild.id);
+    if (!config || !config.enabled) {
+      await interaction.editReply({
+        embeds: [errorEmbed('ระบบยืนยันตัวตนถูกปิดใช้งานชั่วคราว')],
+      });
+      return;
+    }
+
+    const result = await processVerification(interaction, interaction.member, config, 'captcha');
+    if (result.alreadyVerified) {
+      await interaction.editReply({
+        embeds: [infoEmbed('ยืนยันตัวตนแล้ว', `คุณได้รับการยืนยันตัวตนและมียศ **${result.roleName}** อยู่แล้ว`)],
+      });
+      return;
+    }
+
+    await interaction.editReply({
+      embeds: [successEmbed(`🎉 **Captcha ถูกต้อง!** คุณได้ยืนยันตัวตนสำเร็จและได้รับยศ <@&${result.roleId}> เรียบร้อยแล้ว`)],
+    });
+  } catch (err) {
+    await interaction.editReply({
+      embeds: [errorEmbed(`ยืนยันตัวตนไม่สำเร็จ: ${err.message}`)],
+    });
   }
 }

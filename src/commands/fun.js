@@ -1,5 +1,6 @@
 import { SlashCommandBuilder } from 'discord.js';
-import { baseEmbed } from '../utils/embeds.js';
+import { baseEmbed, errorEmbed, EPHEMERAL } from '../utils/embeds.js';
+import { safeText, noMentions } from '../utils/sanitize.js';
 
 const jokes = [
   'ทำไมคอมพิวเตอร์ถึงเย็น? เพราะมันเปิด Windows ไว้',
@@ -29,7 +30,7 @@ export const data = [
   new SlashCommandBuilder()
     .setName('8ball')
     .setDescription('ถามคำถามกับลูกแก้ววิเศษ')
-    .addStringOption(o => o.setName('question').setDescription('คำถาม').setRequired(true)),
+    .addStringOption(o => o.setName('question').setDescription('คำถาม').setRequired(true).setMaxLength(250)),
 
   new SlashCommandBuilder()
     .setName('coinflip')
@@ -61,23 +62,35 @@ export const data = [
   new SlashCommandBuilder()
     .setName('choose')
     .setDescription('สุ่มเลือกจากตัวเลือก')
-    .addStringOption(o => o.setName('options').setDescription('คั่นด้วย comma เช่น ข้าว,ก๋วยเตี๋ยว,พizza').setRequired(true)),
+    .addStringOption(o => o.setName('options').setDescription('คั่นด้วย comma เช่น ข้าว,ก๋วยเตี๋ยว,พิซซ่า').setRequired(true).setMaxLength(500)),
 
   new SlashCommandBuilder()
     .setName('reverse')
     .setDescription('กลับข้อความ')
-    .addStringOption(o => o.setName('text').setDescription('ข้อความ').setRequired(true)),
+    .addStringOption(o => o.setName('text').setDescription('ข้อความ').setRequired(true).setMaxLength(500)),
 
   new SlashCommandBuilder()
     .setName('emojify')
     .setDescription('แปลงข้อความเป็น emoji')
-    .addStringOption(o => o.setName('text').setDescription('ข้อความ').setRequired(true)),
+    .addStringOption(o => o.setName('text').setDescription('ข้อความ').setRequired(true).setMaxLength(100)),
 
   new SlashCommandBuilder()
     .setName('ascii')
     .setDescription('สร้าง ASCII art ตัวอักษรใหญ่')
-    .addStringOption(o => o.setName('text').setDescription('ข้อความ (1-10 ตัว)').setRequired(true)),
+    .addStringOption(o => o.setName('text').setDescription('ข้อความ (1-10 ตัว)').setRequired(true).setMaxLength(10)),
 ];
+
+export const meta = {
+  '8ball': { guildOnly: false, cooldown: 3 },
+  coinflip: { guildOnly: false, cooldown: 2 },
+  dice: { guildOnly: false, cooldown: 2 },
+  rps: { guildOnly: false, cooldown: 3 },
+  joke: { guildOnly: false, cooldown: 3 },
+  choose: { guildOnly: false, cooldown: 3 },
+  reverse: { guildOnly: false, cooldown: 2 },
+  emojify: { guildOnly: false, cooldown: 3 },
+  ascii: { guildOnly: false, cooldown: 3 },
+};
 
 const asciiArt = {
   A: ['  █  ', ' █ █ ', '█████', '█   █', '█   █'],
@@ -104,7 +117,7 @@ export async function execute(interaction) {
   const { commandName } = interaction;
 
   if (commandName === '8ball') {
-    const q = interaction.options.getString('question');
+    const q = safeText(interaction.options.getString('question'), 250);
     const answer = eightBall[Math.floor(Math.random() * eightBall.length)];
     const embed = baseEmbed('🎱 Magic 8-Ball', `**คำถาม:** ${q}\n**คำตอบ:** ${answer}`);
     await interaction.reply({ embeds: [embed] });
@@ -138,43 +151,47 @@ export async function execute(interaction) {
       || (user === 'scissors' && bot === 'paper')
     ) result = 'คุณชนะ! 🎉';
     else result = 'บอทชนะ! 😈';
-    await interaction.reply(
-      `${emojis[user]} vs ${emojis[bot]}\n**คุณ:** ${names[user]} | **บอท:** ${names[bot]}\n${result}`,
-    );
+    await interaction.reply({
+      content: `${emojis[user]} vs ${emojis[bot]}\n**คุณ:** ${names[user]} | **บอท:** ${names[bot]}\n${result}`,
+      allowedMentions: noMentions(),
+    });
     return;
   }
 
   if (commandName === 'joke') {
     const joke = jokes[Math.floor(Math.random() * jokes.length)];
-    await interaction.reply(`😂 ${joke}`);
+    await interaction.reply({ content: `😂 ${joke}`, allowedMentions: noMentions() });
     return;
   }
 
   if (commandName === 'choose') {
-    const opts = interaction.options.getString('options').split(',').map(s => s.trim()).filter(Boolean);
+    const opts = interaction.options.getString('options')
+      .split(',')
+      .map(s => safeText(s.trim(), 100))
+      .filter(Boolean);
     if (opts.length < 2) {
-      return interaction.reply('❌ ต้องมีอย่างน้อย 2 ตัวเลือก คั่นด้วย comma');
+      return interaction.reply({ embeds: [errorEmbed('ต้องมีอย่างน้อย 2 ตัวเลือก คั่นด้วย comma (เช่น ข้าว,ก๋วยเตี๋ยว)')], ...EPHEMERAL });
     }
     const pick = opts[Math.floor(Math.random() * opts.length)];
-    await interaction.reply(`🎯 เลือก: **${pick}**`);
+    await interaction.reply({ content: `🎯 เลือก: **${pick}**`, allowedMentions: noMentions() });
     return;
   }
 
   if (commandName === 'reverse') {
-    const text = interaction.options.getString('text');
-    await interaction.reply(`🔄 ${[...text].reverse().join('')}`);
+    const text = safeText(interaction.options.getString('text'), 500);
+    await interaction.reply({ content: `🔄 ${[...text].reverse().join('')}`, allowedMentions: noMentions() });
     return;
   }
 
   if (commandName === 'emojify') {
     const text = interaction.options.getString('text').toLowerCase();
     const result = [...text].map(c => emojifyMap[c] ?? c).join('');
-    await interaction.reply(result.slice(0, 2000));
+    await interaction.reply({ content: safeText(result, 2000), allowedMentions: noMentions() });
     return;
   }
 
   if (commandName === 'ascii') {
-    const text = interaction.options.getString('text');
-    await interaction.reply(renderAscii(text));
+    const text = safeText(interaction.options.getString('text'), 10);
+    await interaction.reply({ content: renderAscii(text), allowedMentions: noMentions() });
   }
 }

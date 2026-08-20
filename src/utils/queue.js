@@ -33,11 +33,11 @@ class JobQueue {
   /**
    * Register a worker handler for a specific job name.
    */
-  register(jobName, handler) {
+  register(jobName, handler, options = {}) {
     if (typeof handler !== 'function') {
       throw new Error(`Handler for job "${jobName}" must be a function`);
     }
-    this.handlers.set(jobName, handler);
+    this.handlers.set(jobName, { handler, options });
     return this;
   }
 
@@ -50,12 +50,19 @@ class JobQueue {
       return null;
     }
 
+    const worker = this.handlers.get(jobName);
+    const workerOptions = worker?.options || {};
+
+    const maxAttempts = options.maxAttempts ?? options.maxRetries ?? workerOptions.maxAttempts ?? workerOptions.maxRetries ?? 3;
+    const retryDelayMs = options.retryDelayMs ?? workerOptions.retryDelayMs ?? null;
+
     const job = {
       id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
       name: jobName,
       data,
       attempts: 0,
-      maxAttempts: options.maxAttempts ?? 3,
+      maxAttempts,
+      retryDelayMs,
       delayMs: options.delayMs ?? 0,
       createdAt: Date.now(),
       runAt: Date.now() + (options.delayMs ?? 0),
@@ -106,7 +113,8 @@ class JobQueue {
     this.activeJobs.add(job.id);
 
     try {
-      const handler = this.handlers.get(job.name);
+      const worker = this.handlers.get(job.name);
+      const handler = typeof worker === 'function' ? worker : worker?.handler;
       if (!handler) {
         throw new Error(`No worker registered for job type: ${job.name}`);
       }
@@ -123,7 +131,7 @@ class JobQueue {
 
       if (job.attempts < job.maxAttempts && !this.isDraining) {
         this.stats.retried += 1;
-        const backoffMs = Math.min(1000 * Math.pow(2, job.attempts), 30_000);
+        const backoffMs = job.retryDelayMs ?? Math.min(1000 * Math.pow(2, job.attempts), 30_000);
         setTimeout(() => {
           this.queue.unshift(job);
           this.processNext();
@@ -131,6 +139,7 @@ class JobQueue {
       } else {
         this.stats.dlqCount += 1;
         this.dlq.push({
+          taskName: job.name,
           job,
           error: err.message,
           stack: err.stack,
@@ -142,6 +151,20 @@ class JobQueue {
       this.activeJobs.delete(job.id);
       this.processNext();
     }
+  }
+
+  /**
+   * Get captured Dead-Letter Queue items.
+   */
+  getDeadLetters() {
+    return [...this.dlq];
+  }
+
+  /**
+   * Get count of currently active running jobs.
+   */
+  getActiveCount() {
+    return this.activeJobs.size;
   }
 
   /**
@@ -182,7 +205,7 @@ class JobQueue {
 
     const start = Date.now();
     while ((this.activeJobs.size > 0 || this.queue.length > 0) && Date.now() - start < timeoutMs) {
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 50));
     }
 
     logger.info(`Queue: Drain complete. Remaining active: ${this.activeJobs.size}, queue: ${this.queue.length}`);

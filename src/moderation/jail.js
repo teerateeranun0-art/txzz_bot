@@ -9,11 +9,11 @@ import {
   unjailUser,
   getJailedUsers,
   isJailed,
+  getGuildConfig,
 } from '../utils/database.js';
 import { createModCase } from './case-manager.js';
 import { sendModLog } from '../utils/modlog.js';
 import { parseDuration } from '../utils/duration.js';
-import { getGuildConfig } from '../utils/database.js';
 import { logger } from '../utils/logger.js';
 
 /**

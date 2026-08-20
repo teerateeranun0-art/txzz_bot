@@ -26,19 +26,37 @@ function createInMemoryDb() {
     return JSON.parse(JSON.stringify(row));
   }
 
-    function buildQuery(table) {
-      ensureTable(table);
-      const rows = store.get(table);
+  function buildQuery(table) {
+    ensureTable(table);
+    const rows = store.get(table);
     const q = {
       whereClauses: [],
       _order: null,
       _limit: null,
       _offset: 0,
       _toInsert: null,
+      _conflictCols: null,
+      _merge: null,
+      _ignore: false,
       _insert(rowsToInsert) {
         const inserted = [];
         const array = Array.isArray(rowsToInsert) ? rowsToInsert : [rowsToInsert];
         for (const r of array) {
+          if (this._conflictCols && this._conflictCols.length > 0) {
+            const existing = rows.find(row => this._conflictCols.every(k => row[k] === r[k]));
+            if (existing) {
+              if (this._ignore) {
+                inserted.push(existing);
+                continue;
+              }
+              if (this._merge) {
+                const updates = typeof this._merge === 'object' && this._merge !== true ? this._merge : r;
+                Object.assign(existing, copyRow(updates));
+                inserted.push(existing);
+                continue;
+              }
+            }
+          }
           const id = idCounters.get(table);
           const newRow = Object.assign({ id }, copyRow(r));
           idCounters.set(table, id + 1);
@@ -49,9 +67,20 @@ function createInMemoryDb() {
       },
       insert(obj) { this._toInsert = obj; return this; },
       returning() { return this; },
-      onConflict() { return this; },
-      merge() { return this; },
-      ignore() { return this; },
+      onConflict(cols) {
+        this._conflictCols = cols ? (Array.isArray(cols) ? cols : [cols]) : null;
+        return this;
+      },
+      merge(updateObj) {
+        this._merge = updateObj || true;
+        return this;
+      },
+      ignore() {
+        this._ignore = true;
+        return this;
+      },
+      forUpdate() { return this; },
+      transacting() { return this; },
       orderBy(field, dir = 'asc') { this._order = { field, dir }; return this; },
       limit(n) { this._limit = n; return this; },
       offset(n) { this._offset = n; return this; },
@@ -59,14 +88,20 @@ function createInMemoryDb() {
         let res = applyFilters(rows, this.whereClauses);
         return Promise.resolve([{ [alias]: res.length }]);
       },
-      where(cond) {
-        // support object equality
-        this.whereClauses.push({ type: 'object', value: cond });
+      where(cond, val) {
+        if (typeof cond === 'string' && val !== undefined) {
+          this.whereClauses.push({ type: 'object', value: { [cond]: val } });
+        } else if (typeof cond === 'object' && cond !== null) {
+          this.whereClauses.push({ type: 'object', value: cond });
+        }
         return this;
       },
-      andWhere(cond) { return this.where(cond); },
+      andWhere(cond, val) { return this.where(cond, val); },
+      orWhere(cond) {
+        this.whereClauses.push({ type: 'orObject', value: cond });
+        return this;
+      },
       whereRaw(raw, params) {
-        // support details->>'sessionId' = ? pattern used in code
         this.whereClauses.push({ type: 'raw', raw, params });
         return this;
       },
@@ -74,7 +109,33 @@ function createInMemoryDb() {
         this.whereClauses.push({ type: 'in', col, arr });
         return this;
       },
+      whereNull(col) {
+        this.whereClauses.push({ type: 'null', col });
+        return this;
+      },
+      whereNotNull(col) {
+        this.whereClauses.push({ type: 'notNull', col });
+        return this;
+      },
+      whereNot(col, val) {
+        this.whereClauses.push({ type: 'not', col, val });
+        return this;
+      },
       orderByRaw() { return this; },
+      increment(col, val = 1) {
+        const matched = applyFilters(rows, this.whereClauses);
+        for (const r of matched) {
+          r[col] = (Number(r[col]) || 0) + Number(val);
+        }
+        return Promise.resolve(matched.length);
+      },
+      decrement(col, val = 1) {
+        const matched = applyFilters(rows, this.whereClauses);
+        for (const r of matched) {
+          r[col] = (Number(r[col]) || 0) - Number(val);
+        }
+        return Promise.resolve(matched.length);
+      },
       update(upd) {
         const matched = applyFilters(rows, this.whereClauses);
         for (const r of matched) Object.assign(r, copyRow(upd));
@@ -110,6 +171,15 @@ function createInMemoryDb() {
         }
         return this.select().then(onFulfilled, onRejected);
       },
+      catch(onRejected) {
+        return this.then(null, onRejected);
+      },
+      finally(onFinally) {
+        return this.then(
+          (res) => Promise.resolve(onFinally()).then(() => res),
+          (err) => Promise.resolve(onFinally()).then(() => { throw err; })
+        );
+      },
     };
     return q;
   }
@@ -120,10 +190,15 @@ function createInMemoryDb() {
       if (c.type === 'object') {
         const whereObj = c.value;
         result = result.filter((r) => Object.entries(whereObj).every(([k, v]) => r[k] === v));
+      } else if (c.type === 'not') {
+        result = result.filter((r) => r[c.col] !== c.val);
+      } else if (c.type === 'null') {
+        result = result.filter((r) => r[c.col] == null);
+      } else if (c.type === 'notNull') {
+        result = result.filter((r) => r[c.col] != null);
       } else if (c.type === 'in') {
-        result = result.filter((r) => c.arr.includes(r[c.col]));
+        result = result.filter((r) => Array.isArray(c.arr) && c.arr.includes(r[c.col]));
       } else if (c.type === 'raw') {
-        // very limited support for pattern: details->>'sessionId' = ?
         if (/details->>'sessionId'\s*=\s*\?/.test(c.raw)) {
           const val = c.params?.[0];
           result = result.filter((r) => {
@@ -145,8 +220,8 @@ function createInMemoryDb() {
   api.raw = async () => { return { rows: [{ '?column?': 1 }] }; };
   api.destroy = async () => {};
   api.transaction = async (fn) => {
-    // simple transaction: call fn with a lightweight trx that maps to api
     const trx = (table) => buildQuery(table);
+    trx.raw = api.raw;
     return fn(trx);
   };
 
@@ -2759,4 +2834,134 @@ export async function resetWordChain(guildId, channelId) {
 
 export async function getWordChainLeaderboard(guildId) {
   return db('word_chain').where({ guild_id: guildId }).orderBy('record', 'desc');
+}
+
+// ═══════════════════════════════════════════════════
+//  COMMUNITY — Member Verification System (หน้ายืนยันรับยศ)
+// ═══════════════════════════════════════════════════
+
+const verificationCache = new Map();
+
+export async function getVerificationConfig(guildId) {
+  if (verificationCache.has(guildId)) return verificationCache.get(guildId);
+  const row = await db('verification_configs').where({ guild_id: guildId }).first();
+  if (!row) {
+    verificationCache.set(guildId, null);
+    return null;
+  }
+  const parsed = {
+    guildId: row.guild_id,
+    channelId: row.channel_id,
+    messageId: row.message_id,
+    roleId: row.role_id,
+    unverifiedRoleId: row.unverified_role_id || null,
+    logChannelId: row.log_channel_id || null,
+    title: row.title || '🛡️ ยืนยันตัวตนเพื่อรับยศ',
+    description: row.description || 'กดปุ่มด้านล่างเพื่อยืนยันตัวตนและรับยศเข้าสู่เซิร์ฟเวอร์',
+    buttonText: row.button_text || '✅ ยืนยันตัวตน (รับยศ)',
+    buttonStyle: row.button_style || 'Success',
+    mode: row.mode || 'instant', // 'instant' | 'captcha'
+    enabled: row.enabled !== false,
+    verifiedCount: Number(row.verified_count || 0),
+    minAccountAgeDays: Number(row.min_account_age_days ?? 0),
+    updatedAt: Number(row.updated_at || Date.now()),
+  };
+  verificationCache.set(guildId, parsed);
+  return parsed;
+}
+
+export async function setVerificationConfig(guildId, options) {
+  // Invalidate cache before reading current to prevent stale reads
+  verificationCache.delete(guildId);
+  const current = (await getVerificationConfig(guildId)) || {};
+  const payload = {
+    guild_id: guildId,
+    channel_id: options.channelId ?? current.channelId,
+    message_id: options.messageId ?? current.messageId ?? null,
+    role_id: options.roleId ?? current.roleId,
+    unverified_role_id: options.unverifiedRoleId !== undefined ? options.unverifiedRoleId : (current.unverifiedRoleId || null),
+    log_channel_id: options.logChannelId !== undefined ? options.logChannelId : (current.logChannelId || null),
+    title: options.title ?? current.title ?? '🛡️ ยืนยันตัวตนเพื่อรับยศ',
+    description: options.description ?? current.description ?? 'กดปุ่มด้านล่างเพื่อยืนยันตัวตนและรับยศเข้าสู่เซิร์ฟเวอร์',
+    button_text: options.buttonText ?? current.buttonText ?? '✅ ยืนยันตัวตน (รับยศ)',
+    button_style: options.buttonStyle ?? current.buttonStyle ?? 'Success',
+    mode: options.mode ?? current.mode ?? 'instant',
+    enabled: options.enabled ?? current.enabled ?? true,
+    verified_count: current.verifiedCount || 0,
+    min_account_age_days: options.minAccountAgeDays ?? current.minAccountAgeDays ?? 0,
+    updated_at: Date.now(),
+  };
+
+  await db('verification_configs')
+    .insert(payload)
+    .onConflict('guild_id')
+    .merge(payload);
+
+  const updated = {
+    guildId: payload.guild_id,
+    channelId: payload.channel_id,
+    messageId: payload.message_id,
+    roleId: payload.role_id,
+    unverifiedRoleId: payload.unverified_role_id,
+    logChannelId: payload.log_channel_id,
+    title: payload.title,
+    description: payload.description,
+    buttonText: payload.button_text,
+    buttonStyle: payload.button_style,
+    mode: payload.mode,
+    enabled: payload.enabled,
+    verifiedCount: payload.verified_count,
+    minAccountAgeDays: payload.min_account_age_days,
+    updatedAt: payload.updated_at,
+  };
+  verificationCache.set(guildId, updated);
+  return updated;
+}
+
+export async function deleteVerificationConfig(guildId) {
+  await db('verification_configs').where({ guild_id: guildId }).delete();
+  verificationCache.delete(guildId);
+}
+
+export async function recordVerificationLog(guildId, userId, roleId, method = 'instant') {
+  await db('verification_configs')
+    .where({ guild_id: guildId })
+    .increment('verified_count', 1);
+
+  await db('verification_logs').insert({
+    guild_id: guildId,
+    user_id: userId,
+    role_id: roleId,
+    method,
+    verified_at: Date.now(),
+  });
+
+  const cached = verificationCache.get(guildId);
+  if (cached) {
+    cached.verifiedCount = (cached.verifiedCount || 0) + 1;
+    verificationCache.set(guildId, cached);
+  }
+}
+
+export async function getVerificationStats(guildId) {
+  const cfg = await getVerificationConfig(guildId);
+  const totalVerified = cfg?.verifiedCount || 0;
+  const recentLogs = await db('verification_logs')
+    .where({ guild_id: guildId })
+    .orderBy('verified_at', 'desc')
+    .limit(10);
+
+  return {
+    enabled: Boolean(cfg?.enabled),
+    mode: cfg?.mode || 'instant',
+    roleId: cfg?.roleId || null,
+    channelId: cfg?.channelId || null,
+    totalVerified,
+    recentLogs: recentLogs.map((l) => ({
+      userId: l.user_id,
+      roleId: l.role_id,
+      method: l.method,
+      verifiedAt: Number(l.verified_at),
+    })),
+  };
 }

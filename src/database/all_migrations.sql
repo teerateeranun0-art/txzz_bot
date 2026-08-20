@@ -570,4 +570,43 @@ CREATE TABLE IF NOT EXISTS guild_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS guild_subscriptions_plan_status_idx ON guild_subscriptions (plan, status);
 
+CREATE TABLE IF NOT EXISTS verification_configs (
+  guild_id varchar(20) PRIMARY KEY,
+  channel_id varchar(20) NOT NULL,
+  message_id varchar(20),
+  role_id varchar(20) NOT NULL,
+  unverified_role_id varchar(20),
+  log_channel_id varchar(20),
+  title varchar(150) DEFAULT '🛡️ ยืนยันตัวตนเพื่อรับยศ',
+  description varchar(2000) DEFAULT 'กดปุ่มด้านล่างเพื่อยืนยันตัวตนและรับยศเข้าสู่เซิร์ฟเวอร์',
+  button_text varchar(80) DEFAULT '✅ ยืนยันตัวตน (รับยศ)',
+  button_style varchar(20) DEFAULT 'Success',
+  mode varchar(20) DEFAULT 'instant',
+  enabled boolean DEFAULT true,
+  verified_count integer DEFAULT 0,
+  min_account_age_days integer DEFAULT 0,
+  updated_at bigint NOT NULL
+);
+
+-- Idempotent migration: add column to existing tables if not already present
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'verification_configs' AND column_name = 'min_account_age_days'
+  ) THEN
+    ALTER TABLE verification_configs ADD COLUMN min_account_age_days integer DEFAULT 0;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS verification_logs (
+  id serial PRIMARY KEY,
+  guild_id varchar(20) NOT NULL,
+  user_id varchar(20) NOT NULL,
+  role_id varchar(20) NOT NULL,
+  method varchar(20) DEFAULT 'instant',
+  verified_at bigint NOT NULL
+);
+CREATE INDEX IF NOT EXISTS verification_logs_guild_idx ON verification_logs (guild_id, verified_at);
+CREATE INDEX IF NOT EXISTS verification_logs_user_idx ON verification_logs (user_id);
+
 -- End of all migrations

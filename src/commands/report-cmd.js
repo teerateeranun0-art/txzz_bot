@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { successEmbed, errorEmbed, infoEmbed, baseEmbed, EPHEMERAL } from '../utils/embeds.js';
-import { addReport, getPendingQueue, resolveQueueItem, submitBanAppeal, reviewAppeal, getPendingAppeals, getAllAppeals } from '../moderation/appeals.js';
+import { addReport, getPendingQueue, getQueueHistory, resolveQueueItem, submitBanAppeal, reviewAppeal, getPendingAppeals, getAllAppeals } from '../moderation/appeals.js';
 import { getPunishmentRules, addPunishmentRule, deletePunishmentRule } from '../utils/database.js';
 import { safeText } from '../utils/sanitize.js';
 
@@ -146,7 +146,7 @@ export async function execute(interaction) {
       }
 
       if (sub === 'history') {
-        const items = await getPendingQueue(interaction.guild.id);
+        const items = await getQueueHistory(interaction.guild.id);
         if (!items.length) return interaction.reply({ embeds: [infoEmbed('Mod Queue', 'ไม่มีประวัติ')] });
 
         const list = items.slice(0, 15).map((q) =>

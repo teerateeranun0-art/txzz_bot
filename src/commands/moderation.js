@@ -143,7 +143,7 @@ export async function execute(interaction) {
       await target.kick(reason);
       const caseId = await createModCase(guild.id, 'kick', target.id, moderator.id, reason);
       await interaction.reply({ embeds: [successEmbed(`เตะ **${target.user.username}** แล้ว (Case #${caseId})\nเหตุผล: ${reason}`)] });
-      await sendModLog(guild, { action: 'Kick', moderator, target: target.user, reason });
+      await sendModLog(guild, { action: 'Kick', moderator, target: target.user, reason, caseId });
       return;
     }
 
@@ -161,7 +161,7 @@ export async function execute(interaction) {
       await guild.members.ban(user.id, { reason, deleteMessageSeconds: days * 86400 });
       const caseId = await createModCase(guild.id, 'ban', user.id, moderator.id, reason, { deleteDays: days });
       await interaction.reply({ embeds: [successEmbed(`แบน **${user.username}** แล้ว (Case #${caseId})\nเหตุผล: ${reason}`)] });
-      await sendModLog(guild, { action: 'Ban', moderator, target: user, reason });
+      await sendModLog(guild, { action: 'Ban', moderator, target: user, reason, caseId });
       return;
     }
 
@@ -186,7 +186,7 @@ export async function execute(interaction) {
       await target.timeout(msDuration, reason);
       const caseId = await createModCase(guild.id, 'timeout', target.id, moderator.id, reason, { duration });
       await interaction.reply({ embeds: [successEmbed(`Timeout **${target.user.username}** เป็นเวลา **${duration}** (Case #${caseId})\nเหตุผล: ${reason}`)] });
-      await sendModLog(guild, { action: 'Timeout', moderator, target: target.user, reason, extra: `ระยะเวลา: ${duration}` });
+      await sendModLog(guild, { action: 'Timeout', moderator, target: target.user, reason, extra: `ระยะเวลา: ${duration}`, caseId });
       return;
     }
 
@@ -237,8 +237,11 @@ export async function execute(interaction) {
       }
       const reason = safeText(interaction.options.getString('reason'), config.limits.reason);
       const result = await issueWarning(guild, user, moderator, reason);
-      const autoMsg = result.autoAction ? `\n⚠️ Auto-Punish: **${result.autoAction}** (${result.totalPoints} points)` : '';
-      await interaction.reply({ embeds: [warnEmbed(`เตือน **${user.username}** (Case #${result.caseId})\nเหตุผล: ${reason}\nTotal warning points: ${result.totalPoints}${autoMsg}`)] });
+      const autoMsg = result.autoAction ? `\n⚠️ Auto-Punish: **${result.autoAction}**` : '';
+      const embed = warnEmbed(
+        `เตือน **${user.username}** (Case #${result.caseId})\nเหตุผล: ${reason}${autoMsg}`,
+      ).addFields({ name: '📊 Warning Points สะสม', value: `**${result.totalPoints}** คะแนน`, inline: true });
+      await interaction.reply({ embeds: [embed] });
       return;
     }
 
@@ -260,9 +263,9 @@ export async function execute(interaction) {
     if (commandName === 'clearwarns') {
       const user = interaction.options.getUser('user');
       await clearWarnings(guild.id, user.id);
-      await createModCase(guild.id, 'clearwarns', user.id, moderator.id, 'ล้างประวัติการเตือน');
+      const caseId = await createModCase(guild.id, 'clearwarns', user.id, moderator.id, 'ล้างประวัติการเตือน');
       await interaction.reply({ embeds: [successEmbed(`ล้างการเตือนของ **${user.username}** แล้ว`)] });
-      await sendModLog(guild, { action: 'Clear Warns', moderator, target: user, reason: 'ล้างประวัติการเตือน' });
+      await sendModLog(guild, { action: 'Clear Warns', moderator, target: user, reason: 'ล้างประวัติการเตือน', caseId });
       return;
     }
 

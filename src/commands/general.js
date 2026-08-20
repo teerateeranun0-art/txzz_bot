@@ -1,6 +1,7 @@
 import { SlashCommandBuilder } from 'discord.js';
-import { baseEmbed } from '../utils/embeds.js';
+import { baseEmbed, EPHEMERAL } from '../utils/embeds.js';
 import { invitePermissionBits } from '../utils/permissions.js';
+import { config } from '../config.js';
 
 function formatUptime(ms) {
   const s = Math.floor(ms / 1000);
@@ -168,13 +169,13 @@ export async function execute(interaction, client) {
       economy: '**เศรษฐกิจ:** `/balance` `/daily` `/work` `/gamble` `/pay` `/leaderboard` `/deposit` `/withdraw` `/rob`',
       utility: '**ยูทิลิตี้:** `/poll` `/remind` `/embed` `/say` `/calc` `/base64` `/password` `/qr` `/afk`',
       system: '**ระบบ:** `/welcome` `/autorole` `/rank` `/levelboard` `/ticket`',
-      community: '**ชุมชน:** `/giveaway` `/suggestion` `/birthday` `/announce` `/counting` `/wordchain` `/reactionrole` `/starboard`',
+      community: '**ชุมชน:** `/verify` `/giveaway` `/suggestion` `/birthday` `/announce` `/counting` `/wordchain` `/reactionrole` `/starboard`',
       security: '**ความปลอดภัย:** `/security` `/lockdown` `/panic` `/raidmode` `/trusted` `/trusted-role` `/protected` `/incident` `/score` `/snapshot` `/quarantine`',
       'mod-advanced': '**ม็อดขั้นสูง:** `/case` `/modnote` `/moddashboard` `/tempban` `/temprole` `/tempinfo` `/jail` `/unjail` `/jail-list` `/report` `/modqueue` `/appeal` `/punish-rule`',
       automod: '**AutoMod:** `/automod spam` `/automod flood` `/automod caps` `/automod emoji` `/automod links` `/automod invites` `/automod mentions` `/automod duplicates` `/automod scam` `/automod attachments` `/automod status` `/automod filter-add` `/automod filter-remove` `/automod filter-list` `/automod whitelist-role` `/automod whitelist-channel`',
     };
     if (cat && categories[cat]) {
-      await interaction.reply({ content: categories[cat], ephemeral: true });
+      await interaction.reply({ content: categories[cat], ...EPHEMERAL });
       return;
     }
     const embed = baseEmbed('คู่มือคำสั่ง Ultimate Bot', 'ใช้ `/help category:<หมวด>` เพื่อดูรายละเอียด')
@@ -185,13 +186,14 @@ export async function execute(interaction, client) {
           inline: true,
         })),
       );
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await interaction.reply({ embeds: [embed], ...EPHEMERAL });
     return;
   }
 
   if (commandName === 'invite') {
     const perms = invitePermissionBits();
-    const url = `https://discord.com/oauth2/authorize?client_id=${client.user.id}&permissions=${perms}&scope=bot%20applications.commands`;
+    const clientId = client.user?.id || config.clientId;
+    const url = `https://discord.com/oauth2/authorize?client_id=${clientId}&permissions=${perms}&scope=bot%20applications.commands`;
     await interaction.reply({ content: `[เชิญบอทเข้าเซิร์ฟเวอร์](${url})` });
   }
 }
